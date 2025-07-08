@@ -1,20 +1,16 @@
-from pydantic import *
+from pydantic import BaseModel
+from typing import Dict, Any, Optional
 
 class UserBase(BaseModel):
-    vk_id : int
-    email : EmailStr
-    first_name : str
-    last_name : str
+    username: str
 
 class UserCreate(UserBase):
-    access_token : str
+    password: str | None = None
 
-class UserResponse(UserBase):
-    id:int
+class User(UserBase):
+    id: int
+    is_active: bool
+    vk_data: Optional[Dict[str, Any]] = None
 
-    class Config : 
-        from_attributes = True
-
-class Token(BaseModel):
-    access_token : str 
-    token_type : str
+    class Config:
+        orm_mode = True

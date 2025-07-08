@@ -1,19 +1,22 @@
 from fastapi import FastAPI
-from app.routers import notes, users
-from config import settings
+from app.database.db import engine, Base
+from app.routers import auth, users, notes
 
 app = FastAPI(
-    title=settings.app_name,
-    debug=settings.debug
+    title="eNotes.pro API",
+    description="API for eNotes.pro application",
+    version="1.0.0"
 )
 
-app.include_router(notes.router, prefix="/notes", tags=["notes"])
-app.include_router(users.router, prefix="/users", tags=["users"]) 
+@app.on_event("startup")
+async def startup():
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+app.include_router(auth.router, prefix="/auth")
+app.include_router(users.router, prefix="/users")
+app.include_router(notes.router, prefix="/notes")
 
 @app.get("/")
-async def root():
-    return {
-        "message": "Welcome to eNotes.pro API",
-        "docs": "/docs",
-        "redoc": "/redoc"
-    }
+def read_root():
+    return {"message": "Welcome to eNotes.pro API"}

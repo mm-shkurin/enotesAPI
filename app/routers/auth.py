@@ -1,47 +1,33 @@
-import httpx
-from fastapi import APIRouter, HTTPException, Depends, Request
+import aiohttp
+from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import RedirectResponse
-from jose import jwt
-from datetime import datetime, timedelta
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.schemas.users import Token, UserCreate, UserResponse
+from sqlalchemy.future import select
+from app.database.db import get_db
 from app.models.users import User
+from app.schemas.token import Token
+from app.services.security import create_access_token
 from config import settings
-from app.database import get_db
 
-router = APIRouter(tags=["Authentication"])
+router = APIRouter(tags=["auth"])
 
-def create_access_token(data: dict):
-    to_encode = data.copy()
-    expire = datetime.utcnow() + timedelta(minutes=settings.access_token_expire_minutes)
-    to_encode.update({"exp": expire})
-    encoded_jwt = jwt.encode(
-        to_encode, 
-        settings.secret_key, 
-        algorithm=settings.algorithm
-    )
-    return encoded_jwt
-
-@router.get("/auth/vk")
+@router.get("/vk")
 async def auth_vk():
-    auth_url = (
+    return RedirectResponse(
         f"https://oauth.vk.com/authorize?"
         f"client_id={settings.vk_client_id}&"
         f"redirect_uri={settings.vk_redirect_uri}&"
         f"display=page&"
-        f"scope=email&" 
+        f"scope=email&"
         f"response_type=code&"
         f"v=5.131"
     )
-    return RedirectResponse(auth_url)
 
-@router.get("/auth/vk/callback", response_model=Token)
+@router.get("/vk/callback", response_model=Token)
 async def auth_vk_callback(
     code: str, 
-    request: Request,
     db: AsyncSession = Depends(get_db)
 ):
-    # Обмен кода на access token
     token_url = "https://oauth.vk.com/access_token"
     params = {
         "client_id": settings.vk_client_id,
@@ -49,59 +35,81 @@ async def auth_vk_callback(
         "redirect_uri": settings.vk_redirect_uri,
         "code": code
     }
-
-    async with httpx.AsyncClient() as client:
-        response = await client.get(token_url, params=params)
-        data = response.json()
-
-    if "error" in data:
+    
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(token_url, params=params) as response:
+                token_data = await response.json()
+    except Exception as e:
         raise HTTPException(
-            status_code=400,
-            detail=f"VK error: {data['error_description']}"
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"VK token request failed: {str(e)}"
         )
-
-    access_token = data.get("access_token")
-    vk_user_id = data.get("user_id")
-    email = data.get("email", "")
-
-    # Получение информации о пользователе
-    user_info_url = "https://api.vk.com/method/users.get"
-    params = {
-        "user_ids": vk_user_id,
-        "access_token": access_token,
+    
+    if "access_token" not in token_data:
+        error = token_data.get("error", "Unknown error")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"VK error: {error}"
+        )
+    
+    user_url = "https://api.vk.com/method/users.get"
+    user_params = {
+        "access_token": token_data["access_token"],
         "v": "5.131",
-        "fields": "first_name,last_name"
+        "fields": "id,first_name,last_name,email,photo_200,screen_name"
     }
-
-    async with httpx.AsyncClient() as client:
-        response = await client.get(user_info_url, params=params)
-        user_data = response.json()
-
-    if "error" in user_data:
+    
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(user_url, params=user_params) as response:
+                user_data = await response.json()
+    except Exception as e:
         raise HTTPException(
-            status_code=400,
-            detail=f"VK API error: {user_data['error']['error_msg']}"
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"VK user data request failed: {str(e)}"
         )
-
+    
+    if "error" in user_data or "response" not in user_data:
+        error_msg = user_data.get("error", {}).get("error_msg", "Unknown VK error")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"VK API error: {error_msg}"
+        )
+    
     vk_user = user_data["response"][0]
-
-    user = await User.get_by_vk_id(db, vk_user_id)
+    vk_user["access_token"] = token_data["access_token"]  
+    vk_user["email"] = token_data.get("email")  
     
-    user_data = {
-        "vk_id": vk_user_id,
-        "email": email,
-        "first_name": vk_user["first_name"],
-        "last_name": vk_user["last_name"],
-        "access_token": access_token
-    }
+    username = f"vk_{vk_user['id']}"
     
-    if user:
-        user = await User.update(db, user.id, user_data)
+    result = await db.execute(
+        select(User).where(User.username == username)
+    )
+    user = result.scalars().first()
+    
+    if not user:
+        user = User(
+            username=username,
+            email=vk_user.get("email"),
+            vk_data=vk_user
+        )
+        db.add(user)
+        await db.commit()
+        await db.refresh(user)
     else:
-        user = await User.create(db, UserCreate(**user_data))
+        user.vk_data = vk_user
+        if vk_user.get("email"):
+            user.email = vk_user["email"]
+        await db.commit()
+        await db.refresh(user)
     
-    jwt_token = create_access_token(
-        data={"sub": str(user.id)}
+    access_token = create_access_token(
+        data={"sub": user.username}
     )
     
-    return {"access_token": jwt_token, "token_type": "bearer"}
+    return {
+        "access_token": access_token,
+        "token_type": "bearer"
+    }
+    
