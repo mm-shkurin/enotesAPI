@@ -8,9 +8,6 @@ from app.database.db import get_db
 from app.models.users import User
 from config import settings
 
-# Убираем OAuth2PasswordBearer так как используем VK OAuth
-# oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/login")
-
 def create_access_token(data: dict):
     to_encode = data.copy()
     expire = datetime.utcnow() + timedelta(minutes=settings.access_token_expire_minutes)

@@ -13,5 +13,4 @@ class Note(BaseModel):
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
-    # Relationship
     user = relationship("User", back_populates="notes")

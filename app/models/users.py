@@ -13,7 +13,6 @@ class User(BaseModel):
     is_active = Column(Boolean, default=True)
     vk_data = Column(JSONB, nullable=True)  
 
-    # Relationship
     notes = relationship("Note", back_populates="user", cascade="all, delete-orphan")
 
     @property

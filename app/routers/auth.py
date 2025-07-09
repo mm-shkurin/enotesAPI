@@ -111,7 +111,6 @@ async def auth_vk_callback(
     
     vk_user = user_data["response"][0]
     
-    # Валидация обязательных полей
     if "id" not in vk_user:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
