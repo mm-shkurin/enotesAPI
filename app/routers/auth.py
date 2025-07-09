@@ -1,54 +1,82 @@
 import aiohttp
-from fastapi import APIRouter, Depends, HTTPException, status, Header
-from fastapi.responses import RedirectResponse
+from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import RedirectResponse, HTMLResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from app.database.db import get_db
 from app.models.users import User
 from app.schemas.token import Token
-from app.services.security import create_access_token, get_current_user
+from app.services.security import create_access_token
 from config import settings
-from typing import Optional
+import json
 
 router = APIRouter(tags=["auth"])
 
-async def get_token_from_header(authorization: Optional[str] = Header(None)) -> Optional[str]:
-    if authorization and authorization.startswith("Bearer "):
-        return authorization.replace("Bearer ", "")
-    return None
-
-@router.get("/vk")
+@router.get("/vk", response_class=HTMLResponse)
 async def auth_vk():
-    return RedirectResponse(
-        f"https://oauth.vk.com/authorize?"
-        f"client_id={settings.vk_client_id}&"
-        f"redirect_uri={settings.vk_redirect_uri}&"
-        f"display=page&"
-        f"scope=email&"
-        f"response_type=code&"
-        f"v=5.131"
-    )
+    html="""
+    <body><center>
+	<div>
+  <script src="https://unpkg.com/@vkid/sdk@<3.0.0/dist-sdk/umd/index.js"></script>
+  <script type="text/javascript">
+    if ('VKIDSDK' in window) {
+      const VKID = window.VKIDSDK;
 
-@router.get("/test")
-async def test_auth():
-    """Тестовый эндпоинт для проверки авторизации без VK"""
-    return {
-        "message": "Тестовый эндпоинт авторизации работает",
-        "vk_client_id": settings.vk_client_id,
-        "redirect_uri": settings.vk_redirect_uri
+      VKID.Config.init({
+        app: 53860682,
+        redirectUrl: 'https://gavyt.ooguy.com/auth/vk/callback',
+        responseMode: VKID.ConfigResponseMode.Callback,
+        source: VKID.ConfigSource.LOWCODE,
+        scope: '', // Заполните нужными доступами по необходимости
+      });
+
+      const oneTap = new VKID.OneTap();
+
+      oneTap.render({
+        container: document.currentScript.parentElement,
+        showAlternativeLogin: true
+      })
+      .on(VKID.WidgetEvents.ERROR, vkidOnError)
+      .on(VKID.OneTapInternalEvents.LOGIN_SUCCESS, function (payload) {
+        const code = payload.code;
+        const deviceId = payload.device_id;
+
+        VKID.Auth.exchangeCode(code, deviceId)
+          .then(vkidOnSuccess)
+          .catch(vkidOnError);
+      });
+    
+      function vkidOnSuccess(data) {
+        // Обработка полученного результата
+      }
+    
+      function vkidOnError(error) {
+        // Обработка ошибки
+      }
     }
+  </script>
+</div>
+    </center></body>
+    """
+    return HTMLResponse(content=html, status_code=200)
+
+# @router.get("/vk")
+# async def auth_vk():
+    # return RedirectResponse(
+        # f"https://oauth.vk.com/authorize?"
+        # f"client_id={settings.vk_client_id}&"
+        # f"redirect_uri={settings.vk_redirect_uri}&"
+        # f"display=page&"
+        # f"scope=email&"
+        # f"response_type=code&"
+        # f"v=5.131"
+    # )
 
 @router.get("/vk/callback", response_model=Token)
 async def auth_vk_callback(
     code: str, 
     db: AsyncSession = Depends(get_db)
 ):
-    if not code:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Authorization code is required"
-        )
-    
     token_url = "https://oauth.vk.com/access_token"
     params = {
         "client_id": settings.vk_client_id,
@@ -60,13 +88,8 @@ async def auth_vk_callback(
     try:
         async with aiohttp.ClientSession() as session:
             async with session.get(token_url, params=params) as response:
-                if response.status != 200:
-                    raise HTTPException(
-                        status_code=status.HTTP_400_BAD_REQUEST,
-                        detail=f"VK token request failed with status {response.status}"
-                    )
                 token_data = await response.json()
-    except aiohttp.ClientError as e:
+    except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"VK token request failed: {str(e)}"
@@ -74,10 +97,9 @@ async def auth_vk_callback(
     
     if "access_token" not in token_data:
         error = token_data.get("error", "Unknown error")
-        error_description = token_data.get("error_description", "")
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"VK error: {error}. {error_description}"
+            detail=f"VK error: {error}"
         )
     
     user_url = "https://api.vk.com/method/users.get"
@@ -90,13 +112,8 @@ async def auth_vk_callback(
     try:
         async with aiohttp.ClientSession() as session:
             async with session.get(user_url, params=user_params) as response:
-                if response.status != 200:
-                    raise HTTPException(
-                        status_code=status.HTTP_400_BAD_REQUEST,
-                        detail=f"VK user data request failed with status {response.status}"
-                    )
                 user_data = await response.json()
-    except aiohttp.ClientError as e:
+    except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"VK user data request failed: {str(e)}"
@@ -110,33 +127,26 @@ async def auth_vk_callback(
         )
     
     vk_user = user_data["response"][0]
-    
-    if "id" not in vk_user:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="VK user ID is required"
-        )
-    
     vk_user["access_token"] = token_data["access_token"]  
     vk_user["email"] = token_data.get("email")  
     
-    username = f"vk_{vk_user['id']}"
+    vk_id = f"vk_{vk_user['id']}"
     
     result = await db.execute(
-        select(User).where(User.username == username)
+        select(User).where(User.vk_id == vk_id)
     )
-    user = result.scalars().first()
+    user = result.scalar()
     
     if not user:
         user = User(
-            username=username,
+            vk_id=vk_id,
             email=vk_user.get("email"),
             vk_data=vk_user
         )
         db.add(user)
         await db.commit()
         await db.refresh(user)
-    else:
+    else: #?
         user.vk_data = vk_user
         if vk_user.get("email"):
             user.email = vk_user["email"]
@@ -144,31 +154,48 @@ async def auth_vk_callback(
         await db.refresh(user)
     
     access_token = create_access_token(
-        data={"sub": user.username}
+        data={"sub": user.vk_id}
     )
     
     return {
         "access_token": access_token,
         "token_type": "bearer"
     }
+ 
+@router.get("/tg", response_class=HTMLResponse)
+async def auth_tg():
+    html="""
+    <body><center>
+	<script async 
+	src="https://telegram.org/js/telegram-widget.js?2" 
+	data-telegram-login="oauth_test987_bot" data-size="large" 
+	data-auth-url="tg/callback"></script>
+    </center></body>
+    """
+    return HTMLResponse(content=html, status_code=200)
 
-@router.get("/me")
-async def get_current_user_info(
-    token: str = Depends(get_token_from_header),
-    db: AsyncSession = Depends(get_db)
-):
-    if not token:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Token is required"
-        )
+@router.get("/tg/callback",status_code=status.HTTP_201_CREATED)
+async def auth_tg_callback(id:str, first_name:str, last_name:str, username:str, photo_url:str,
+ auth_date:str, hash:str,db: AsyncSession = Depends(get_db)):
+    oauth_json = json.dumps({
+    "id": id,
+    "first_name": first_name,
+    "last_name": last_name,
+    "username": username,
+    "photo_url": photo_url,
+    "auth_date": auth_date,
+    "hash": hash
+    })
     
-    user = await get_current_user(token, db)
-    return {
-        "id": user.id,
-        "username": user.username,
-        "email": user.email,
-        "vk_id": user.vk_id,
-        "is_active": user.is_active
-    }
-    
+    exists = await db.execute(
+        select(User).where(User.tg_id == id)
+    )
+    exists = exists.scalar()
+    # exists = db.query(User).filter(models.User.tg_id==id).scalar()
+    if not exists:
+        user_record=User(tg_id=id,tg_data=oauth_json)
+        await db.add(user_record)
+        await db.commit()
+        # await db.refresh(user)
+    else:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT,detail="User alredy exist")

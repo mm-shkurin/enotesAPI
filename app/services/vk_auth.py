@@ -1,5 +1,7 @@
 import aiohttp
-from config import settings
+from jose import jwt
+from datetime import datetime, timedelta
+from app.config import settings
 
 async def get_vk_user_data(access_token: str):
     url = "https://api.vk.com/method/users.get"
@@ -11,8 +13,6 @@ async def get_vk_user_data(access_token: str):
     
     async with aiohttp.ClientSession() as session:
         async with session.get(url, params=params) as response:
-            if response.status != 200:
-                raise ValueError(f"VK API returned status {response.status}")
             data = await response.json()
     
     if "error" in data or "response" not in data:
@@ -22,3 +22,14 @@ async def get_vk_user_data(access_token: str):
     user_data = data["response"][0]
     user_data["username"] = f"vk_{user_data['id']}"
     return user_data
+
+def create_access_token(data: dict):
+    to_encode = data.copy()
+    expire = datetime.utcnow() + timedelta(minutes=settings.access_token_expire_minutes)
+    to_encode.update({"exp": expire})
+    encoded_jwt = jwt.encode(
+        to_encode, 
+        settings.secret_key, 
+        algorithm=settings.algorithm
+    )
+    return encoded_jwt

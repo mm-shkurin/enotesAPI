@@ -1,0 +1,1 @@
+docker run --name postgres-dev -p 5432:5432 -e POSTGRES_USER=admin -e POSTGRES_PASSWORD=4234cerer23cq11 -e POSTGRES_DB=testdb -v /root/docker/volumes/postgres:/var/lib/postgresql/data -d postgres
