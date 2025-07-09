@@ -14,12 +14,10 @@ class Settings(BaseSettings):
     def database_url(self) -> str:
         return f"postgresql+asyncpg://{self.postgres_user}:{self.postgres_password}@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
     
-    # Настройки VK OAuth
     vk_client_id: str
     vk_client_secret: str
     vk_redirect_uri: str
     
-    # Настройки JWT
     secret_key: str
     algorithm: str = "HS256"
     access_token_expire_minutes: int = 30 
