@@ -1,5 +1,6 @@
 from sqlalchemy import Column, Integer, String, Boolean
 from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.orm import relationship
 from app.database.db import BaseModel
 
 class User(BaseModel):
@@ -12,6 +13,11 @@ class User(BaseModel):
     is_active = Column(Boolean, default=True)
     vk_data = Column(JSONB, nullable=True)  
 
+    # Relationship
+    notes = relationship("Note", back_populates="user", cascade="all, delete-orphan")
+
     @property
     def vk_id(self):
-        return self.vk_data.get('id') if self.vk_data else None
+        if self.vk_data is not None:
+            return self.vk_data.get('id')
+        return None

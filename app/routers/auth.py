@@ -1,15 +1,21 @@
 import aiohttp
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Header
 from fastapi.responses import RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from app.database.db import get_db
 from app.models.users import User
 from app.schemas.token import Token
-from app.services.security import create_access_token
+from app.services.security import create_access_token, get_current_user
 from config import settings
+from typing import Optional
 
 router = APIRouter(tags=["auth"])
+
+async def get_token_from_header(authorization: Optional[str] = Header(None)) -> Optional[str]:
+    if authorization and authorization.startswith("Bearer "):
+        return authorization.replace("Bearer ", "")
+    return None
 
 @router.get("/vk")
 async def auth_vk():
@@ -23,11 +29,26 @@ async def auth_vk():
         f"v=5.131"
     )
 
+@router.get("/test")
+async def test_auth():
+    """Тестовый эндпоинт для проверки авторизации без VK"""
+    return {
+        "message": "Тестовый эндпоинт авторизации работает",
+        "vk_client_id": settings.vk_client_id,
+        "redirect_uri": settings.vk_redirect_uri
+    }
+
 @router.get("/vk/callback", response_model=Token)
 async def auth_vk_callback(
     code: str, 
     db: AsyncSession = Depends(get_db)
 ):
+    if not code:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Authorization code is required"
+        )
+    
     token_url = "https://oauth.vk.com/access_token"
     params = {
         "client_id": settings.vk_client_id,
@@ -39,8 +60,13 @@ async def auth_vk_callback(
     try:
         async with aiohttp.ClientSession() as session:
             async with session.get(token_url, params=params) as response:
+                if response.status != 200:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=f"VK token request failed with status {response.status}"
+                    )
                 token_data = await response.json()
-    except Exception as e:
+    except aiohttp.ClientError as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"VK token request failed: {str(e)}"
@@ -48,9 +74,10 @@ async def auth_vk_callback(
     
     if "access_token" not in token_data:
         error = token_data.get("error", "Unknown error")
+        error_description = token_data.get("error_description", "")
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"VK error: {error}"
+            detail=f"VK error: {error}. {error_description}"
         )
     
     user_url = "https://api.vk.com/method/users.get"
@@ -63,8 +90,13 @@ async def auth_vk_callback(
     try:
         async with aiohttp.ClientSession() as session:
             async with session.get(user_url, params=user_params) as response:
+                if response.status != 200:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=f"VK user data request failed with status {response.status}"
+                    )
                 user_data = await response.json()
-    except Exception as e:
+    except aiohttp.ClientError as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"VK user data request failed: {str(e)}"
@@ -78,6 +110,14 @@ async def auth_vk_callback(
         )
     
     vk_user = user_data["response"][0]
+    
+    # Валидация обязательных полей
+    if "id" not in vk_user:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="VK user ID is required"
+        )
+    
     vk_user["access_token"] = token_data["access_token"]  
     vk_user["email"] = token_data.get("email")  
     
@@ -111,5 +151,25 @@ async def auth_vk_callback(
     return {
         "access_token": access_token,
         "token_type": "bearer"
+    }
+
+@router.get("/me")
+async def get_current_user_info(
+    token: str = Depends(get_token_from_header),
+    db: AsyncSession = Depends(get_db)
+):
+    if not token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token is required"
+        )
+    
+    user = await get_current_user(token, db)
+    return {
+        "id": user.id,
+        "username": user.username,
+        "email": user.email,
+        "vk_id": user.vk_id,
+        "is_active": user.is_active
     }
     

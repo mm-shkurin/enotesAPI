@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from app.database.db import engine, Base
 from app.routers import auth, users, notes
+from app.models import users as user_models, notes as note_models
 
 app = FastAPI(
     title="eNotes.pro API",

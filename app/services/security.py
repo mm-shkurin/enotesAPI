@@ -4,11 +4,12 @@ from jose import JWTError, jwt
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from datetime import datetime, timedelta
-from app.database import get_db
+from app.database.db import get_db
 from app.models.users import User
 from config import settings
 
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/login")
+# Убираем OAuth2PasswordBearer так как используем VK OAuth
+# oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/login")
 
 def create_access_token(data: dict):
     to_encode = data.copy()
@@ -22,7 +23,7 @@ def create_access_token(data: dict):
     return encoded_jwt
 
 async def get_current_user(
-    token: str = Depends(oauth2_scheme),
+    token: str,
     db: AsyncSession = Depends(get_db)
 ) -> User:
     credentials_exception = HTTPException(

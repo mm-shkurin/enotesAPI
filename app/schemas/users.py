@@ -13,4 +13,4 @@ class User(UserBase):
     vk_data: Optional[Dict[str, Any]] = None
 
     class Config:
-        orm_mode = True
+        from_attributes = True
